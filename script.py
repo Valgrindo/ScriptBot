@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 An implementation of the Script abstraction, consisting of Lines and Frames.
 
@@ -10,50 +11,49 @@ Rochester Institute of Technology
 
 from bs4 import BeautifulSoup, Tag
 from typing import *
+from frame import Frame
 
-from os.path import isdir, isfile
+from os.path import isdir, isfile, join
 from os import listdir
+from dataclasses import dataclass
+from utils import selective_iterator, compose
+from collections import namedtuple
 
 
-class Frame:
+class Response:
     """
-    A representation of a script frame.
-    Each frame is a collection of fields and required lexical categories and senses for those fields.
+    An expectation for a user's response. Contains a set of frames to be realized and an action to take.
+    """
+    def __init__(self):
+        self.to_realize = []  # type: List[str]  # List of frame names
+        self.action = ''  # type: Union[str, Tuple[str, str]]  # Either continue or defer to some other script
+        self.transfer = False  # If the response defers, should local KD be transferred to the script?
+
+    def satisfy(self, answer: str) -> Tuple[float, Set[Frame]]:
+        """
+        Check whether a given answer satisfies the requirements of this responce
+        :param answer: A string answer provided by a user.
+        :return: (satisfaction %, set of potentially incomplete frames)
+        """
+        raise NotImplementedError()
+
+
+class Line:
+    """
+    A representation of a dialogue line in a script.
     """
 
-    _FRAMES = set()  # type: Set[Frame]
+    def __init__(self):
+        self.text = ''
+        self.responses = []  # type: List[Response]
 
-    class FrameParseException(Exception):
+    def display(self, frame_db: Set[Frame]):
         """
-        Am Exception indicating an error with the frame's syntax.
-        """
-        pass
-
-    @staticmethod
-    def parse_set(fname: str) -> Set[Frame]:
-        """
-        Parse a set of sequential frames from a file.
-        :param fname: Source file name.
+        Display the text of this line. Refer to the frame DB to fill in any references.
+        :param frame_db:
         :return:
         """
-        pass
-
-    @staticmethod
-    def initialize(directory: str) -> NoReturn:
-        """
-        Initialize a global frame collection.
-        :param directory: global frames directory.
-        :return: None
-        """
-        if not isdir(directory):
-            raise ValueError(f'Invalid frame source directory: {directory}')
-
-        for item in listdir(directory):
-            try:
-                for frame in Frame.parse_set(item):
-                    Frame._FRAMES.add(frame)
-            except Frame.FrameParseException as fe:
-                print(f'Error in frame set {item}: {fe}')
+        raise NotImplementedError()
 
 
 class Script:
@@ -95,7 +95,8 @@ class Script:
 
         for item in listdir(directory):
             try:
-                entity = Script(item)
+                full_path = join(directory, item)
+                entity = Script(full_path)
                 Script._SCRIPTS.add(entity)
             except Script.ScriptParseException as se:
                 print(f'Error in script {item}: {se}')
@@ -117,13 +118,15 @@ class Script:
         """
         self._lines = []
         self.ref_frames = set()  # type: Set[Frame]
+        self.name = ''
 
         with open(fname, 'r') as fp:
             bs = BeautifulSoup(fp, 'xml')
         root = bs.find('scenario')
-
         if not root:
             raise Script.ScriptParseException("Root <scenario> tag not found.")
+
+        self.name = root.attrs['name'].lower()
 
         # root is expected to have two top-level tags: <dialogue> and <frames>
         dialogue_root = root.find('dialogue')
@@ -131,14 +134,21 @@ class Script:
             raise Script.ScriptParseException("Required <dialogue> tag not found.")
 
         # Dialogue consists of <lines>
-        for elem in dialogue_root:
-            if not isinstance(elem, Tag):
-                # Skip comments, whitespace, etc.
-                continue
+        for elem in selective_iterator(dialogue_root, 'line', Script.ScriptParseException):
+            line = Line()
+            line.text = elem.text.strip('\n\r\t ')  # Copy over the provided string and all internal <f> references.
 
-            if elem.name != 'line':
-                raise Script.ScriptParseException(f"Unexpected tag {elem.name}")
-            # TODO: Process the individual line
+            # Now, process each response line:
+            for rsp in selective_iterator(elem, 'response'):
+                r = Response()
+                expected_frame_names = list(map(compose(str.strip, str.lower), rsp.attrs['f'].split(',')))
+                r.to_realize = expected_frame_names
+                r.action = rsp.attrs['action']
+
+                if 'transfer' in rsp.attrs:
+                    r.transfer = True
+                line.responses.append(r)
+            self._lines.append(line)
 
         # All lines processed, now the local frames.
         frame_root = root.find('frames')
@@ -146,14 +156,9 @@ class Script:
             raise Script.ScriptParseException("Required <frames> tag not found.")
 
         # Frame collection consists of individual <frames>
-        for elem in frame_root:
-            if not isinstance(elem, Tag):
-                # Skip comments, whitespace, etc.
-                continue
-
-            if elem.name != 'frame':
-                raise Script.ScriptParseException(f"Unexpected tag {elem.name}")
-            # TODO: Process the individual frame
+        for elem in selective_iterator(frame_root, 'frame', Frame.FrameParseException):
+            f = Frame.parse_frame(elem)
+            self.ref_frames.add(f)  # Add the frame to the set of local frames.
 
         # All lines and frames processed,
         # TODO: Any post-processing necessary?

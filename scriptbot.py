@@ -11,12 +11,15 @@ Rochester Institute of Technology
 import argparse
 from os.path import isfile, isdir
 from os import listdir
+from os.path import dirname, join
 from typing import *
 
 from script import Script, Frame
 
-DEFAULT_SCRIPT_DIR = '~\\scripts'
-DEFAULT_FRAME_DIR = '~\\frames'
+REL_PATH = dirname(__file__)
+
+DEFAULT_SCRIPT_DIR = join(REL_PATH, 'scripts')
+DEFAULT_FRAME_DIR = join(REL_PATH, 'frames')
 
 
 def main():
@@ -28,13 +31,13 @@ def main():
     argp.add_argument('-s', '--script', help='Path to a script file to execute.', required=True)
     args = argp.parse_args()
 
-    if not isfile(args.script):
-        raise ValueError(f'Script file {args.script} not found!')
-
     Frame.initialize(DEFAULT_FRAME_DIR)
     Script.initialize(DEFAULT_SCRIPT_DIR)
 
-    script = Script.get(args.script)
+    try:
+        script = Script.get(args.script)
+    except KeyError:
+        raise ValueError(f'Script {args.script} not found!')
     script.execute()
 
 
