@@ -108,6 +108,19 @@ class Frame:
             except Frame.FrameParseException as fe:
                 print(f'Error in frame set {item}: {fe}')
 
+    @staticmethod
+    def get(item):
+        """
+        Fetch a frame by name.
+        :param item: The name of the frame to fetch.
+        :return:
+        """
+        filtered_set = list(filter(lambda s: s.name == item, Frame._FRAMES))
+        if not filtered_set:
+            raise KeyError(f'Frame {item} not found.')
+
+        return filtered_set[0]
+
     """
     INSTANCE METHODS
     """
@@ -116,6 +129,25 @@ class Frame:
         self.name = name
 
         # Fields are added dynamically by the parser.
+
+    def frame_iterator(self) -> Tuple[str, FieldFilter]:
+        """
+        Iterate over all the non-name fields of the frame.
+        :return:
+        """
+        for key, value in self.__dict__.items():
+            if key == 'name':
+                continue
+            yield key, value
+
+    def __copy__(self):
+        """
+        Create a deep copy of a frame.
+        :return:
+        """
+        other = Frame(self.name)
+        other.__dict__ = self.__dict__.copy()
+        return other
 
     def __repr__(self):
         return self.name
