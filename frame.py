@@ -15,6 +15,9 @@ import re
 
 from bs4 import Tag, BeautifulSoup
 from utils import selective_iterator
+from nltk.corpus import wordnet as wd
+from nltk import pos_tag
+from nltk.corpus.reader.wordnet import Synset
 
 
 class Frame:
@@ -23,7 +26,7 @@ class Frame:
     Each frame is a collection of fields and required lexical categories and senses for those fields.
     """
 
-    _FRAMES = set()  # type: Set[Frame]
+    _FRAMES = {}  # type: Dict[str, Frame]
 
     class FrameParseException(Exception):
         """
@@ -35,20 +38,73 @@ class Frame:
         """
         An representation for lexical and semantic restrictions on frame fields.
         """
-        def __init__(self, filter_str: str):
+        def __init__(self, filter_tag: Tag):
             """
-            :param filter_str: A string of the form "lexical_r | semantic_r_1, semantic_r_2, ..."
+            :param filter_tag: A bs4 tag with the Field element.
             """
-            match = re.findall(r"(\S+\s?)\|\s?(\S+\s?)(,\S+\s?)*", filter_str.strip('\n\r '))[0]
-            match = list(filter(lambda x: bool(x), map(lambda s: s.strip(', '), match)))
-            self.lexical = match[0]
-            self.semantic = match[1:]
+            self.lexical = Frame.FieldFilter._parse_single_val_attr('lexical', filter_tag)  # type: str
+            self.semantic = Frame.FieldFilter._parse_multival_attr('semantic', filter_tag)  # type: List[str]
+            self.pos = Frame.FieldFilter._parse_multival_attr('pos', filter_tag)            # type: List[str]
+            self.pattern = Frame.FieldFilter._parse_single_val_attr('pattern', filter_tag)  # type: str
+
+        @staticmethod
+        def _parse_multival_attr(attr, tag):
+            if attr not in tag.attrs or tag.attrs[attr] == '*':
+                return None
+
+            data = tag.attrs[attr]
+            return [s.strip(' ') for s in data.split(',')]
+
+        @staticmethod
+        def _parse_single_val_attr(attr, tag):
+            if attr not in tag.attrs or tag.attrs[attr] == '*':
+                return None
+
+            data = tag.attrs[attr]
+            return data.strip(' ')
 
         def __repr__(self):
-            return f'{self.lexical} | {self.semantic}'
+            return f'Lexical: {self.lexical}, Semantic: {self.semantic}, PoS: {self.pos}, Pattern: {self.pattern}'
 
         def __str__(self):
             return self.__repr__()
+
+        def word_match(self, word: str) -> bool:
+            """
+            Test whether a given word satisfies the restrictions of this field filter.
+            :param word: The word to test.
+            :return:
+            """
+            if self.pattern:
+                match = re.match(self.pattern, word)
+                if not match:
+                    return False
+
+            if self.pos:
+                match = pos_tag([word])[0][1] in self.pos
+                if not match:
+                    return False
+
+            return True
+
+        def sense_match(self, sense: Synset) -> bool:
+            """
+            Test whether a given sense satisfies the restrictions of this field filter.
+            :param sense: The sense to test.
+            :return:
+            """
+            if self.lexical:
+                match = sense.lexname() == self.lexical
+                if not match:
+                    return False
+
+            if self.semantic:
+                match = any([sense.name()[:sense.name().rfind('.')] == s for s in self.semantic])
+                if not match:
+                    return match
+
+            return True
+
 
     @staticmethod
     def parse_set(fname: str) -> Set[Frame]:
@@ -77,17 +133,16 @@ class Frame:
     @staticmethod
     def parse_frame(elem: Tag) -> Frame:
         f = Frame(elem.attrs['name'].lower())  # Create a frame with the name specified in the tag.
-        for line in elem.text.split('\n'):
-            line = line.strip('\n\r ')
-            if not line:
-                continue
-            # Each line in side the <frame> tag is of the following form:
-            # field_name: lexical_filter | semantic_filter_1, [semantic_filter_2, ...]
-            # Parse the pattern into a dynamic set of fields.
-            split_data = line.split(':')
-            f_name = split_data[0].strip()
-            f_filter = Frame.FieldFilter(split_data[1])
-            setattr(f, f_name, f_filter)
+
+        for field in selective_iterator(elem, 'field'):
+            # Each frame field is an XML attribute of the following form:
+            # <field name="..." [lexical="..."] [semantic="..."] [pos="..."] [pattern="..."]/>
+            # Where name is the name of the frame, and the rest are optional filters.
+            # An absence of a tag indicates a wildcard that matches anything.
+            f_name = field.attrs['name']
+            f_filter = Frame.FieldFilter(field)
+            f.fields[f_name] = f_filter
+
         return f
 
     @staticmethod
@@ -104,22 +159,41 @@ class Frame:
             try:
                 full_path = join(directory, item)
                 for frame in Frame.parse_set(full_path):
-                    Frame._FRAMES.add(frame)
+                    Frame.store(frame)
             except Frame.FrameParseException as fe:
                 print(f'Error in frame set {item}: {fe}')
 
     @staticmethod
-    def get(item):
+    def get(item: str):
         """
         Fetch a frame by name.
         :param item: The name of the frame to fetch.
         :return:
         """
-        filtered_set = list(filter(lambda s: s.name == item, Frame._FRAMES))
-        if not filtered_set:
+        if item not in Frame._FRAMES:
             raise KeyError(f'Frame {item} not found.')
 
-        return filtered_set[0]
+        return Frame._FRAMES[item].__copy__()
+
+    @staticmethod
+    def has(item: str):
+        """
+        Check if a global frame with a given name exists.
+        :param item:
+        :return:
+        """
+        return item in Frame._FRAMES
+
+    @staticmethod
+    def store(item: Frame):
+        """
+        Store a frame as global knowledge.
+        :param item: The frame to store.
+        :return:
+        """
+        if item.name in Frame._FRAMES:
+            raise KeyError(f'Duplicate frame {item.name}')
+        Frame._FRAMES[item.name] = item
 
     """
     INSTANCE METHODS
@@ -127,17 +201,15 @@ class Frame:
 
     def __init__(self, name: str):
         self.name = name
-
-        # Fields are added dynamically by the parser.
+        self.fields = {}  # type: Dict[str, Frame.FieldFilter]
+        self.bindings = {}  # type: Dict[str, str]
 
     def frame_iterator(self) -> Tuple[str, FieldFilter]:
         """
         Iterate over all the non-name fields of the frame.
         :return:
         """
-        for key, value in self.__dict__.items():
-            if key == 'name':
-                continue
+        for key, value in self.fields.items():
             yield key, value
 
     def __copy__(self):
@@ -146,12 +218,20 @@ class Frame:
         :return:
         """
         other = Frame(self.name)
-        other.__dict__ = self.__dict__.copy()
+        other.fields = {k: v for k, v in self.fields}
+        other.bindings = {k: v for k, v in self.bindings}
+
         return other
 
     def __repr__(self):
-        return self.name
+        return f'Frame({self.name})'
 
     def __str__(self):
         return self.__repr__()
 
+    def __hash__(self):
+        return hash(self.name)
+
+
+# Type Alias for the frame dictionary
+FrameStorage = Dict[str, Frame]

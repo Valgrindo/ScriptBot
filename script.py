@@ -11,7 +11,7 @@ Rochester Institute of Technology
 
 from bs4 import BeautifulSoup, Tag
 from typing import *
-from frame import Frame
+from frame import Frame, FrameStorage
 import re
 
 from os.path import isdir, isfile, join
@@ -30,13 +30,20 @@ class Response:
         self.action = ''  # type: Union[str, Tuple[str, str]]  # Either continue or defer to some other script
         self.transfer = False  # If the response defers, should local KD be transferred to the script?
 
-    def satisfy(self, answer: str) -> Tuple[float, Set[Frame]]:
+    def satisfy(self, answer: str, local: FrameStorage) -> Tuple[float, FrameStorage]:
         """
         Check whether a given answer satisfies the requirements of this response
         :param answer: A string answer provided by a user.
+        :param local: A set of frames representing local knowledge.
         :return: (satisfaction %, set of potentially incomplete frames)
         """
-        frames = [Frame.get(fn).__copy__() for fn in self.to_realize]
+        # Bring in any
+        frames = []
+        for f in self.to_realize:
+            if Frame.has(f):
+                frames.append(Frame.get(f))
+            if f in local:
+                frames.append(local[f])
 
         # Each frame is a set of fields with lexical and semantic restrictions.
         # For each word in the answer:
@@ -45,31 +52,50 @@ class Response:
         #           If not, perform a hypernym search for a match.
         #   If not:
         #       Continue to next word.
+        # TODO: Rewrite the description
         tokens = word_tokenize(answer)
         for word in tokens:
-            senses = wd.synsets(word)  # Get a list of all the senses of the word.
-            for sense in senses:
-                # Check is the lexical name of this sense matches any frame fields:
-                for f in frames:
-                    for field, fltr in f.frame_iterator():
-                        if sense.lexname() != fltr.lexical:
-                            # This sense cannot be a match since the lexical name is wrong.
-                            continue
+            # For every frame, check if this word satisfies literal restrictions
+            for f in frames:
+                for field, fltr in f.frame_iterator():
+                    if not fltr.word_match(word):
+                        # The word is incompatible with this field of this frame.
+                        continue
 
-                        search_res = None
-                        if sense.name() != fltr.semantic:
-                            # Lexical name is correct, but semantic is not. Search for a matching sense in hypernyms.
-                            search_res = Response.hypernym_search(sense, fltr)  # TODO: Implement
+                    # The word is literally compatible. Now, check all of its senses.
+                    senses = wd.synsets(word)
+                    any_match = False
 
-                        if search_res or sense.name() == fltr.semantic \
-                                or not isinstance(f.__getattribute__(field), Frame.FieldFilter):
-                            setattr(f, field, word)
+                    # If there are no sense restrictions, it's a match.
+                    if not fltr.lexical and not fltr.semantic:
+                        any_match = True
+                    # If there are sense restrictions, but the word has no senses, no match.
+                    elif not senses:
+                        any_match = False
+                    # Otherwise, check all senses for a potential match.
+                    else:
+                        for sense in senses:
+                            if fltr.sense_match(sense):
+                                any_match = True
+                                break
+                            else:
+                                # If the sense did not match, conduct a recursive hypernym search
+                                if self.hypernym_search(sense, fltr):
+                                    any_match = True
+                                    break
+
+                    # All senses' ontologies explored. If there was a match, bind this words as the field value
+                    if any_match:
+                        f.bindings[field] = word
 
         # Examined all the words. Now, count up the number of unsatisfied fields.
-        # TODO: Tally frameset completeness
         sat = 0.0
+        total = sum([len(f.fields) for f in frames])
+        for f in frames:
+            sat += sum([1 for v in f.bindings.values() if v is not None])
+        sat /= total
 
-        return sat, set(frames)
+        return sat, {f.name: f for f in frames}
 
     @staticmethod
     def hypernym_search(sense, fltr: Frame.FieldFilter) -> bool:
@@ -79,8 +105,21 @@ class Response:
         :param fltr:
         :return:
         """
-        # TODO: Implement
-        pass
+        if fltr.sense_match(sense):
+            # Success: target sense present in the ontology.
+            return True
+
+        match = False
+        for hp in sense.hypernyms():
+            match = match or Response.hypernym_search(hp, fltr)
+
+        return match
+
+    def __repr__(self):
+        return f'Realize {self.to_realize} -> {self.action}'
+
+    def __str__(self):
+        return self.__repr__()
 
 
 class Line:
@@ -92,9 +131,10 @@ class Line:
         self.text = ''
         self.responses = []  # type: List[Response]
 
-    def say(self):
+    def say(self, local: FrameStorage = None):
         """
         Display the text of this line. Refer to the local knowledge base to fill any <f> fields.
+        :local: Optional local context frames.
         :return:
         """
         # Scan the string for occurrences of the <f>frame.field</f> pattern. Construct the sentence by looking up the
@@ -108,11 +148,19 @@ class Line:
             return
 
         refs = [self.text[start:end].strip('$ ').split('.') for (start, end) in slots]
-        plugs = [Frame.get(name).__getattribute__(field) for (name, field) in refs]
+        plugs = []
+        for name, field in refs:
+            if local and name in local:
+                plugs.append(local[name].bindings[field])
+            elif Frame.has(name):
+                plugs.append(Frame.get(name).bindings[field])
+            else:
+                raise ValueError(f'Required frame {name} has not been learned!')
 
         to_say = ''
         for i in range(len(slots)):
-            to_say += self.text[:slots[i][0]] + plugs[i]
+            to_say += self.text[:slots[i][0]+1] + plugs[i]
+        to_say += self.text[slots[-1][1]:]
 
         print(to_say)
 
@@ -140,7 +188,7 @@ class Script:
         """
         filtered_set = list(filter(lambda s: s.name == item, Script._SCRIPTS))
         if not filtered_set:
-            raise KeyError(f'Script {item} not found.')
+            raise KeyError(f'Script "{item}" not found.')
 
         return filtered_set[0]
 
@@ -178,9 +226,8 @@ class Script:
         :param fname:
         """
         self._lines = []
-        self.ref_frames = set()  # type: Set[Frame]
         self.name = ''
-        self.local_frames = set()  #type: Set[Frame] # Local knowledge storage.
+        self.local_frames = {}  # type: FrameStorage # Local knowledge storage.
 
         with open(fname, 'r') as fp:
             bs = BeautifulSoup(fp, 'xml')
@@ -220,12 +267,12 @@ class Script:
         # Frame collection consists of individual <frames>
         for elem in selective_iterator(frame_root, 'frame', Frame.FrameParseException):
             f = Frame.parse_frame(elem)
-            self.ref_frames.add(f)  # Add the frame to the set of local frames.
+            self.local_frames[f.name] = f  # Add the frame to the set of local frames.
 
         # All lines and frames processed,
         # TODO: Any post-processing necessary?
 
-    def execute(self, tn: Set[Frame] = None):
+    def execute(self, tn: FrameStorage = None):
         """
         Begin line-by-line execution of the script.
         :param tn: The set of transferred knowledge.
@@ -243,13 +290,13 @@ class Script:
 
         # For every line of the script, say the line and process the response.
         for line in self._lines:
-            line.say()
+            line.say(local=self.local_frames)
             response = input('> ')
 
             # Find which response option is satisfied the most.
             best_sat, best_frames, best_r = 0, set(), None
             for r in line.responses:
-                sat, frames = r.satisfy(response)
+                sat, frames = r.satisfy(response, self.local_frames)
                 if sat > best_sat:
                     best_sat, best_frames, best_r = sat, frames, r
 
@@ -257,7 +304,7 @@ class Script:
                 # There were unfilled fields in the required frames.
                 # Extract the needed information from the user.
                 # TODO: Handle the case where the bot needs to ask questions.
-                pass
+                raise NotImplementedError()
             else:
                 # The user's reply satisfied all the frames. Save them to local knowledge.
                 self.local_frames.update(best_frames)
