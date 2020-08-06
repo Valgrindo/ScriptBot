@@ -105,7 +105,6 @@ class Frame:
 
             return True
 
-
     @staticmethod
     def parse_set(fname: str) -> Set[Frame]:
         """
@@ -133,6 +132,7 @@ class Frame:
     @staticmethod
     def parse_frame(elem: Tag) -> Frame:
         f = Frame(elem.attrs['name'].lower())  # Create a frame with the name specified in the tag.
+        f.desc = elem.attrs['description']
 
         for field in selective_iterator(elem, 'field'):
             # Each frame field is an XML attribute of the following form:
@@ -201,6 +201,7 @@ class Frame:
 
     def __init__(self, name: str):
         self.name = name
+        self.desc = None
         self.fields = {}  # type: Dict[str, Frame.FieldFilter]
         self.bindings = {}  # type: Dict[str, str]
 
@@ -218,8 +219,8 @@ class Frame:
         :return:
         """
         other = Frame(self.name)
-        other.fields = {k: v for k, v in self.fields}
-        other.bindings = {k: v for k, v in self.bindings}
+        other.fields = {k: v for k, v in self.fields.items()}
+        other.bindings = {k: v for k, v in self.bindings.items()}
 
         return other
 

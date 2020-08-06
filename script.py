@@ -147,7 +147,7 @@ class Line:
             print(self.text)
             return
 
-        refs = [self.text[start:end].strip('$ ').split('.') for (start, end) in slots]
+        refs = [list(filter(lambda x: x != '', self.text[start:end].strip('$ ').split('.'))) for (start, end) in slots]
         plugs = []
         for name, field in refs:
             if local and name in local:
@@ -158,8 +158,11 @@ class Line:
                 raise ValueError(f'Required frame {name} has not been learned!')
 
         to_say = ''
+        cursor = 0
         for i in range(len(slots)):
-            to_say += self.text[:slots[i][0]+1] + plugs[i]
+            before = self.text[cursor:slots[i][0]+1]
+            to_say += before + plugs[i]
+            cursor = slots[i][1]+1
         to_say += self.text[slots[-1][1]:]
 
         print(to_say)
@@ -291,35 +294,63 @@ class Script:
         # For every line of the script, say the line and process the response.
         for line in self._lines:
             line.say(local=self.local_frames)
-            response = input('> ')
+
+            if not line.responses:
+                # Do not offer an input prompt if there are no response options.
+                continue
 
             # Find which response option is satisfied the most.
-            best_sat, best_frames, best_r = 0, set(), None
-            for r in line.responses:
-                sat, frames = r.satisfy(response, self.local_frames)
-                if sat > best_sat:
-                    best_sat, best_frames, best_r = sat, frames, r
+            best_sat, best_frames, best_r = 0, {}, None
+            while best_r is None:
+                response = input('> ')
+                for r in line.responses:
+                    sat, frames = r.satisfy(response, self.local_frames)
+                    if sat > best_sat:
+                        best_sat, best_frames, best_r = sat, frames, r
+
+                if best_r is None:
+                    print('I did not understand what you were talking about.')
+                else:
+                    break
 
             if best_sat != 1:
                 # There were unfilled fields in the required frames.
                 # Extract the needed information from the user.
-                # TODO: Handle the case where the bot needs to ask questions.
-                raise NotImplementedError()
-            else:
-                # The user's reply satisfied all the frames. Save them to local knowledge.
-                self.local_frames.update(best_frames)
+                for f in best_frames.values():
+                    print(f'I believe you are talking about {f.desc}, but I need some more information.')
+                    for field, val in f.fields.items():
+                        # While any field remains unfilled, ask the user pointed questions to extract the information.
+                        if field in f.bindings:
+                            # If the field has been filled, do not ask about it.
+                            continue
+                        while True:
+                            print(f'What {field} were you referring to?')
+                            response = input('> ')
 
-                # Execute the action associated with selected response.
-                if best_r.action != 'continue':
-                    # Expected form: defer:<script>
-                    res = best_r.action.split(':')
-                    if len(res) != 2 or res[0] != 'defer':
-                        raise ValueError(f'Invalid action: {best_r.action}')
+                            # Try to satisfy just this field of the whole frame:
+                            _, frame_d = best_r.satisfy(response, {f.name: f})
+                            if field in frame_d[f.name].bindings:
+                                f.bindings[field] = frame_d[f.name].bindings[field]  # Apply the acquired info.
+                                print(f'Got it! Your {field} is {f.bindings[field]}.')
+                                break
+                            else:
+                                # Keep asking until a satisfying answer is given.
+                                print("I still do not understand.")
 
-                    # Execute the script pointed to by the action.
-                    Script.get(res[1]).execute(self.local_frames if best_r.transfer else None)
-                    return  # Do not continue execution of this script.
+            # The user's reply satisfied all the frames. Save them to local knowledge.
+            self.local_frames.update(best_frames)
 
-                # Implicitly move on to next line on act == 'continue'
+            # Execute the action associated with selected response.
+            if best_r.action != 'continue':
+                # Expected form: defer:<script>
+                res = best_r.action.split(':')
+                if len(res) != 2 or res[0] != 'defer':
+                    raise ValueError(f'Invalid action: {best_r.action}')
+
+                # Execute the script pointed to by the action.
+                Script.get(res[1]).execute(self.local_frames if best_r.transfer else None)
+                return  # Do not continue execution of this script.
+
+            # Implicitly move on to next line on act == 'continue'
 
 
