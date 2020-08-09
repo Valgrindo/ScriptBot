@@ -1,0 +1,19 @@
+<!-- A scenario for scheduling an emergency room visit.
+    The following frames are required:
+    name_f
+    emergency
+
+-->
+<scenario name="EMERGENCY">
+    <dialogue>
+        <line>
+            Please, proceed to the emergency room, we will examine the $emergency.motivation  in your $emergency.problem.
+            Do you consent to anesthesia during your surgery?
+            <response f="AFFIRM" action="continue"/>
+        </line>
+    </dialogue>
+
+    <frames>
+
+    </frames>
+</scenario>

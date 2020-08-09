@@ -1,0 +1,46 @@
+<!-- This script represents a specialist questioning the patient about their problem. -->
+<!-- Required frames: name_f, specialist -->
+<scenario name="SPECIALIST">
+    <dialogue>
+        <line>
+            Transferring you to a specialist now...
+            ...
+            Good afternoon. I am a $specialist.specialist . I am going to ask you some questions now.
+            What is your phone number? Please, use the format 111-222-3344
+            <response f="phone" action="continue"/>
+        </line>
+        <line>
+            What is your date of birth? Please use mm/dd/yyyy.
+            <response f="dob" action="continue"/>
+        </line>
+        <line>
+            Last 4 digits of your social?
+            <response f="social" action="continue"/>
+        </line>
+        <line>
+            Thank you, $name_f.name . Which day and time would you like to schedule your appointment?
+            You may say something like "Thursday at 4"
+            <response f="apt" action="continue"/>
+        </line>
+        <line>
+            Ok! $name_f.name, your appointment has been scheduled for $apt.day at $apt.time. You will receive a text
+            reminder at $phone.phone the day before. See you then.
+        </line>
+    </dialogue>
+
+    <frames>
+        <frame name="phone" description="phone number">
+            <field name="phone" pattern="\d{3}\-\d{3}\-\d{4}"/>
+        </frame>
+        <frame name="dob" description="date of birth">
+            <field name="birthday" pattern="\d{2}\/\d{2}\/\d{4}"/>
+        </frame>
+        <frame name="social" description="SSN">
+            <field name="social" pattern="\d{4}"/>
+        </frame>
+        <frame name="apt" description="appointment details">
+            <field name="day" lexical="noun.time" semantic="weekday.n"/>
+            <field name="time" pattern="(\d|\d{2})((\s?\:?(\s?\d{2}?))?\s?(pm|am))?"/>
+        </frame>
+    </frames>
+</scenario>

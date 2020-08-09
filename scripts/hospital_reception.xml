@@ -1,0 +1,61 @@
+<!-- A script for handling incoming calls into a hospital -->
+<scenario name="RECEPTION">
+
+    <!-- <dialogue> section lays out the structure of the script. It specifies lines to be said by the bot,
+         the frames expected to be fulfilled by the response, and points to use knowledge accumulated during
+         conversation -->
+    <dialogue>
+        <line>
+            Welcome to Rochester Regional Hospital! What is your name?
+            <response f="name_f" action="continue"/>
+        </line>
+        <line>
+            <!-- The <f> notations refers to frames stored as accumulated knowledge -->
+            What service can we provide today, $name_f.name?
+            <response f="emergency" action="defer:emergency" transfer="+"/>
+            <response f="specialist" action="defer:specialist" transfer="+"/>
+            <response f="nothing" action="continue"/>
+        </line>
+        <line>
+            Is there anything else we can do, $name_f.name?
+            <response f="affirm" action="defer:reception" transfer="+"/>
+            <response f="deny" action="continue"/>
+        </line>
+        <line>
+            Thank you for your call, have a great day!
+        </line>
+    </dialogue>
+
+    <!-- Definitions of frames to be used in the <dialogue> section. -->
+    <!-- A frame can be arbitrarily complete in its definition
+        1) If a frame is a response expectation, then every field must be filled by the response.
+        2) if a frame is queried within a line, it may be incomplete so long as the specific field is not.
+    -->
+    <frames>
+        <!-- Each frame consists of a name and a list of fields.Each field is of the form:
+            lexical category | sense_1, [sense_2, ...]
+            The search algorithm examines all synonyms and hypernyms of matching category until
+            a matching sense is found -->
+        <frame name="name_f" description="your name">
+            <field name="name" lexical="*" pos="NN, NNP" semantic="*" pattern="[A-Z][a-z]+"/>
+        </frame>
+
+        <!-- I am experiencing {distress} in my {body part}. -->
+        <frame name="emergency" description="having an emergency">
+            <field name="motivation" semantic="distress.n, symptom.n"/>
+            <field name="problem" lexical="noun.body" semantic="cognition.n, body_part.n"/>
+        </frame>
+
+        <!-- I want to see a {kind of doctor} -->
+        <frame name="specialist" description="seeing a specialist">
+            <field name="need" lexical="noun.group" semantic="meeting.n"/>
+            <field name="specialist" lexical="noun.person" semantic="health_professional.n"/>
+        </frame>
+
+        <!-- Nothing -->
+        <frame name="nothing" description="not needing help">
+            <field name="service" lexical="adj.all" semantic="none.s"/>
+        </frame>
+
+    </frames>
+</scenario>

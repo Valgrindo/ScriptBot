@@ -1,0 +1,10 @@
+<!-- This file is a collection of global frames to be scared across multiple scripts -->
+<frames>
+    <frame name="affirm" description="agreeing">
+        <field name="response" lexical="noun.communication" semantic="affirmative.n"/>
+    </frame>
+    <frame name="deny" description="disagreeing">
+        <field name="response" lexical="noun.communication" semantic="negative.n"/>
+    </frame>
+</frames>
+
